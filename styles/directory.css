@@ -1,4 +1,5 @@
-﻿.uttv-hidden {
+﻿.side-nav-section[data-uttv-hide-section],
+.uttv-hidden {
 	display: none !important;
 }
 

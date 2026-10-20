@@ -19,6 +19,9 @@
 		// determines if followed channels/categories shall be hidden
 		let hideFollowing = true;
 
+		// hide entire sidebar sections other than Following
+		let sidebarFollowingOnly = false;
+
 		// determines if stream reruns shall be hidden
 		let hideReruns = false;
 
@@ -119,6 +122,11 @@
 
 		// blacklistedItems
 		if (typeof request.blacklistedItems === 'object') {
+
+			if (typeof request.sidebarFollowingOnly === 'boolean') {
+
+				sidebarFollowingOnly = request.sidebarFollowingOnly;
+			}
 
 			const items     = request.blacklistedItems;
 			const cacheOnly = (request.storage === false);
@@ -821,13 +829,21 @@
 
 		const nodes = Array.from(sidebarNode.querySelectorAll(sidebarItemSelector));
 		const sections = Array.from(sidebarNode.querySelectorAll('.side-nav-section'));
+		const followingLink = rootNode.querySelector('a[href="/directory/following"]');
+		const followingLabel = followingLink ? followingLink.textContent.trim() : '';
 
 		// Remember section identity while expanded: collapsed cards can lose their IDs.
 		for (const section of sections) {
 
 			const identities = Array.from(section.querySelectorAll(sidebarItemSelector))
 				.map(getSidebarChannelKind);
-			if (identities.includes('followed')) {
+			const label = (section.getAttribute('aria-label') || '').trim();
+			// Labels survive a collapsed first load, when cards have no channel-type IDs.
+			if (
+				identities.includes('followed') ||
+				/^(following|followed channels)$/i.test(label) ||
+				(followingLabel && label === followingLabel)
+			) {
 
 				sidebarSectionTypes.set(section, 'followed');
 
@@ -835,10 +851,14 @@
 
 				sidebarSectionTypes.set(section, 'recommended');
 			}
+
+			section.toggleAttribute('data-uttv-hide-section',
+				sidebarFollowingOnly && sidebarSectionTypes.get(section) !== 'followed');
 		}
 
 		return nodes.filter(function(node) {
 
+			if (node.closest('[data-uttv-hide-section]')) { return false; }
 			if (modes[mode] && !node.matches(modes[mode])) { return false; }
 			if (mode !== 'recommended') { return true; }
 
@@ -2745,10 +2765,14 @@
 			'enabled',
 			'renderButtons',
 			'hideFollowing',
+			'sidebarFollowingOnly',
 			'hideReruns'
 		];
 
 		const result = await storageGet(stateKeys);
+
+		sidebarFollowingOnly = result.sidebarFollowingOnly === true;
+		logVerbose('Only show Following in the sidebar:', sidebarFollowingOnly);
 
 		// enabled
 		if (typeof result['enabled'] === 'boolean') {
