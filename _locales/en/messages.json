@@ -53,6 +53,9 @@
 	"blacklist_SettingsHideReruns": {
 		"message": "Hide Stream Reruns"
 	},
+	"blacklist_SettingsSidebarFollowingOnly": {
+		"message": "Only show Following in the sidebar"
+	},
 	"blacklist_SettingsSyncStorage": {
 		"message": "Synchronize Blacklist via Cloud"
 	},

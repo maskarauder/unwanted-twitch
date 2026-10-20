@@ -240,6 +240,8 @@ async function onSave() {
 	// hide following
 	await storageSet({ 'hideFollowing': hideFollowingCheckbox.checked });
 
+	await storageSet({ 'sidebarFollowingOnly': sidebarFollowingOnlyCheckbox.checked });
+
 	// hide reruns
 	await storageSet({ 'hideReruns': hideRerunsCheckbox.checked });
 
@@ -259,7 +261,10 @@ async function onSave() {
 
 		// store via content script to reflect changes immediately
 		try {
-			await chrome.runtime.sendMessage({ 'blacklistedItems': items });
+			await chrome.runtime.sendMessage({
+				'blacklistedItems': items,
+				'sidebarFollowingOnly': sidebarFollowingOnlyCheckbox.checked
+			});
 		}
 		catch (error) {
 			console.error(error);
@@ -433,6 +438,7 @@ let isModified = false;
 /* BEGIN: prepare elements */
 
 	const hideFollowingCheckbox  = document.getElementById('hideFollowing');
+	const sidebarFollowingOnlyCheckbox = document.getElementById('sidebarFollowingOnly');
 	const hideRerunsCheckbox     = document.getElementById('hideReruns');
 	const useSyncStorageCheckbox = document.getElementById('useSyncStorage');
 
@@ -487,6 +493,7 @@ document.querySelectorAll('tr.input input').forEach((e) => {
 /* BEGIN: button actions */
 
 	hideFollowingCheckbox.addEventListener('change', flashSaveButton);
+	sidebarFollowingOnlyCheckbox.addEventListener('change', flashSaveButton);
 	hideRerunsCheckbox.addEventListener('change', flashSaveButton);
 	useSyncStorageCheckbox.addEventListener('change', flashSaveButton);
 
@@ -510,6 +517,7 @@ document.querySelectorAll('tr.input input').forEach((e) => {
 
 	document.querySelector('.settings h2').textContent          = chrome.i18n.getMessage('blacklist_SettingsHeadline');
 	document.getElementById('label_hideFollowing').textContent  = chrome.i18n.getMessage('blacklist_SettingsHideFollowing');
+	document.getElementById('label_sidebarFollowingOnly').textContent = chrome.i18n.getMessage('blacklist_SettingsSidebarFollowingOnly');
 	document.getElementById('label_hideReruns').textContent     = chrome.i18n.getMessage('blacklist_SettingsHideReruns');
 	document.getElementById('label_useSyncStorage').textContent = chrome.i18n.getMessage('blacklist_SettingsSyncStorage');
 
@@ -585,6 +593,7 @@ const loadBlacklistedItems = async() => {
 	Promise.allSettled([
 
 		loadHideFollowing(),
+		loadSidebarFollowingOnly(),
 		loadHideReruns(),
 		loadStorageMode(),
 
@@ -606,6 +615,12 @@ async function loadHideFollowing() {
 		(typeof result.hideFollowing !== 'boolean') ||
 		(result.hideFollowing === true)
 	);
+}
+
+async function loadSidebarFollowingOnly() {
+
+	const result = await storageGet('sidebarFollowingOnly');
+	sidebarFollowingOnlyCheckbox.checked = result.sidebarFollowingOnly === true;
 }
 
 // hide reruns
