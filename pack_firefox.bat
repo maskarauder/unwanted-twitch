@@ -16,6 +16,8 @@ del %target%
  -x!"publish\"^
  -x!"raw\"^
  -x!"tests\"^
+ -x!"node_modules\"^
+ -x!"package*.json"^
  -x!"webstore\"^
  -x!"*.md"^
  -x!"*.bat"

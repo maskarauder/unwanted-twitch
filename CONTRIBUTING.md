@@ -27,5 +27,13 @@ If you are a developer and feel comfortable with JavaScript and the DOM, you can
 3. Load the repository as a temporary extension. On Chrome, visit `chrome://extensions/`. On Firefox, visit `about:debugging#/runtime/this-firefox`.
 4. Open `/scripts/common.js` in your favorite editor and change the debugging flag to `const debug = 1;`. This will output almost all debug information in the browser console, except trace data. Whenever you change files of a currently loaded extension, you will have to reload the extension, see step 3.
 
+### Running regression tests
+
+With Node.js 18 or newer installed, run `npm ci` followed by `npm test` from the repository root. The tests use jsdom only for development; the extension has no runtime dependency on it, and the packaging scripts exclude the test dependencies.
+
+The sidebar tests cover current and legacy card markup, category/channel filtering, collapsed and collaboration cards, delayed mounting, sidebar replacement, batched updates, and the followed-channel preference. Their reduced DOM fixtures are based on Twitch's sidebar inspected on October 20, 2026. After loading the extension in a browser, also check the sidebar on a channel page, expand/collapse it, and navigate between channels. Twitch may serve different layouts to different users.
+
+Sidebar monitoring starts independently of the directory, retries once per second until the sidebar mounts, and reconnects if Twitch replaces it. One observer batches card updates, including metadata changes. Category filtering can retain the last visible category when a card collapses; a page first loaded with the sidebar collapsed may not expose any category information to filter.
+
 ### Understanding the main loops and detection flow
 Entry point is `/scripts/directory.js`. When the Twitch page `https://www.twitch.tv/` loads for the first time, the extension will wait for `DOMContentLoaded` event. When the event is fired, `init()` is invoked and loads the blacklist from storage using `getBlacklistedItems()`. It will invoke `onPageChange()` to trigger the first filter process. From now on, page changes are being monitored by comparing the current location path in small intervals of `monitorPages()` (Twitch manipulates the history instead of hard page reloads). Whenever a page change is detected, another filtering process occurs. The filtering process consists of 4 major steps: filter directory, monitor directory for scroll/toggle events, filter sidebar and observe sidebar for mutations. To be continued...

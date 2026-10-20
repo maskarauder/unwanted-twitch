@@ -53,8 +53,23 @@
 	let directoryFilterRunning = false;
 	let sidebarFilterRunning   = false;
 
-	// last time the sidebar filtering was triggered by the observer
-	let lastSidebarChange = new Date();
+	// one observer follows the current sidebar, independently of directory loading
+	let sidebarObserver = null;
+	let observedSidebar = null;
+	let sidebarFilterTimeout;
+	let monitorSidebarInterval;
+	const sidebarHiddenNodes = new WeakMap();
+	const sidebarSectionTypes = new WeakMap();
+	const sidebarItemCategories = new WeakMap();
+	const sidebarSelector = '[data-a-target^="side-nav-bar"], #side-nav';
+	const sidebarItemSelector = [
+		'a[data-a-id^="followed-channel-"]',
+		'a[data-a-id^="recommended-channel-"]',
+		'a[data-a-id^="popular-channel-"]',
+		'a[data-a-id^="similarity-channel-"]',
+		'a.side-nav-card',
+		'a.side-nav-card__link'
+	].join(', ');
 
 	// current page
 	let currentPage = getCurrentPage();
@@ -341,42 +356,36 @@
 	function observeSidebar() {
 		logTrace('invoking observeSidebar()');
 
-		const observerCooldown = 500;
+		const target = rootNode.querySelector(sidebarSelector);
+		if (target === observedSidebar) { return; }
 
-		const targetSelector = '[data-a-target^="side-nav-bar"]';
-		const target         = rootNode.querySelector(targetSelector);
+		if (sidebarObserver) { sidebarObserver.disconnect(); }
+		window.clearTimeout(sidebarFilterTimeout);
+		sidebarFilterTimeout = undefined;
+		observedSidebar = target;
 
-		if (target !== null) {
+		if (target === null) { return; }
 
-			const observer = new MutationObserver(function callback_observeSidebar() {
-				logTrace('callback invoked: observeSidebar()');
+		sidebarObserver = new MutationObserver(function callback_observeSidebar() {
 
-				// force cooldown to avoid processing multiple mutations at once
-				const timeElapsed = (new Date() - lastSidebarChange);
-				if (timeElapsed < observerCooldown) {
+			// Coalesce updates, but always process the last mutation in a burst.
+			if (sidebarFilterTimeout !== undefined) { return; }
+			sidebarFilterTimeout = window.setTimeout(function() {
 
-					return logVerbose('Skipping sidebar mutation, because it was fired within the ' + observerCooldown + ' ms cooldown.');
-				}
+				sidebarFilterTimeout = undefined;
+				filterSidebar(hideFollowing ? 'all' : 'recommended');
+			}, 100);
+		});
+		sidebarObserver.observe(target, {
+			childList: true,
+			subtree: true,
+			characterData: true,
+			attributes: true,
+			// Do not observe the style/data-uttv attributes written by our filter.
+			attributeFilter: ['href', 'title', 'alt', 'aria-label', 'class', 'data-a-id', 'data-a-target', 'data-test-selector']
+		});
 
-				lastSidebarChange = new Date();
-
-				// trigger sidebar filter
-				if (hideFollowing === true) {
-
-					filterSidebar();
-
-				} else {
-
-					filterSidebar('recommended');
-				}
-
-			});
-			observer.observe(target, { childList: true, subtree: true });
-
-		} else {
-
-			logWarn('Unable to find sidebar. Expected:', targetSelector);
-		}
+		filterSidebar(hideFollowing ? 'all' : 'recommended');
 	}
 
 	/**
@@ -550,7 +559,7 @@
 	/**
 	 * Filters items in the sidebar of the current page. Returns the remaining (not blacklisted) items.
 	 */
-	function filterSidebar(mode = 'visible') {
+	function filterSidebar(mode = 'all') {
 		logTrace('invoking filterSidebar()');
 
 		// prevent filtering more than once at the same time
@@ -562,12 +571,14 @@
 
 		sidebarFilterRunning = true;
 
-		const items          = getSidebarItems(mode);
-		const remainingItems = filterSidebarItems(items);
+		try {
 
-		sidebarFilterRunning = false;
+			return filterSidebarItems(getSidebarItems(mode));
 
-		return remainingItems;
+		} finally {
+
+			sidebarFilterRunning = false;
+		}
 	}
 
 	/**
@@ -599,6 +610,7 @@
 				}
 			}
 
+			restoreSidebarItem(item);
 			remainingItems.push(item);
 		}
 
@@ -775,105 +787,73 @@
 	function getSidebarItemNodes(mode) {
 		logTrace('invoking getSidebarItemNodes($)', mode);
 
-		if (typeof mode !== 'string') {
-
-			throw new Error('Argument "mode" is required. Expected a string.');
-		}
-
 		const modes = {
-			'visible':     { prefix: '', suffix: ':not([data-uttv-hidden])'    },
-			'hidden':      { prefix: '', suffix: '[data-uttv-hidden]'          },
-			'unprocessed': { prefix: '', suffix: ':not([data-uttv-processed])' },
-			'processed':   { prefix: '', suffix: '[data-uttv-processed]'       },
-			'recommended': { prefix: '', suffix: ':not([data-uttv-hidden])'    }
+			'all':         '',
+			'visible':     ':not([data-uttv-hidden])',
+			'hidden':      '[data-uttv-hidden]',
+			'unprocessed': ':not([data-uttv-processed])',
+			'processed':   '[data-uttv-processed]',
+			'recommended': ''
 		};
+		if (!Object.prototype.hasOwnProperty.call(modes, mode)) {
 
-		let selector;
-		let subSelector = { prefix: '', suffix: '' };
-
-		if (modes[mode]) {
-
-			subSelector = modes[mode];
-
-		} else {
-
-			throw new Error('Value of argument "mode", which is "' + mode + '", is unknown.');
+			throw new Error('Unknown sidebar mode: ' + mode);
 		}
 
-		// "!" will be replaced with prefix, "%" will be replaced with suffix
-		selector = [
+		const sidebarNode = rootNode.querySelector(sidebarSelector);
+		if (sidebarNode === null) { return []; }
 
-			'!a[data-a-id^="followed-channel-"]%',
-			'!a[data-a-id^="recommended-channel-"]%',
-			'!a[data-a-id^="popular-channel-"]%',
-			'!a[data-a-id^="similarity-channel-"]%',
-			'!a.side-nav-card%'
+		const nodes = Array.from(sidebarNode.querySelectorAll(sidebarItemSelector));
+		const sections = Array.from(sidebarNode.querySelectorAll('.side-nav-section'));
 
-		].join(', ');
+		// Remember section identity while expanded: collapsed cards can lose their IDs.
+		for (const section of sections) {
 
-		// replace selector wildcards
-		if (typeof selector === 'string') {
+			const identities = Array.from(section.querySelectorAll(sidebarItemSelector))
+				.map(getSidebarChannelKind);
+			if (identities.includes('followed')) {
 
-			selector = selector.replace(/!/g, subSelector.prefix);
-			selector = selector.replace(/%/g, subSelector.suffix);
-		}
+				sidebarSectionTypes.set(section, 'followed');
 
-		let nodes = [];
+			} else if (identities.includes('recommended')) {
 
-		const sidebarSelector = '[data-a-target^="side-nav-bar"]';
-		const sidebarNode     = rootNode.querySelector(sidebarSelector);
-
-		if (sidebarNode !== null) {
-
-			// if there are two or more sections in the sidebar, the second section is for recommended channels
-			if (mode === 'recommended') {
-
-				const sidebarSectionsSelector = '.side-nav-section';
-				const sidebarSectionsNodes    = sidebarNode.querySelectorAll(sidebarSectionsSelector);
-
-				logVerbose('Looking for recommended channels section in sidebar.', sidebarSectionsSelector);
-
-				let sidebarLabel = null;
-				if (sidebarSectionsNodes.length === 1) {
-
-					sidebarLabel = sidebarSectionsNodes[0].getAttribute('aria-label');
-
-				} else if (sidebarSectionsNodes.length >= 2) {
-
-					sidebarLabel = sidebarSectionsNodes[1].getAttribute('aria-label');
-
-				} else {
-
-					logVerbose('Unable to determine recommended channels section.');
-				}
-
-				if (sidebarLabel !== null) {
-
-					logVerbose('Determined recommended channels section to be:', sidebarLabel, sidebarSectionsNodes);
-
-					// prefix selector with more specific section
-					selector = ('.side-nav-section[aria-label="' + sidebarLabel + '"] ' + selector);
-				}
+				sidebarSectionTypes.set(section, 'recommended');
 			}
-
-			nodes             = sidebarNode.querySelectorAll(selector);
-			const nodesLength = nodes.length;
-
-			if (nodesLength > 0) {
-
-				logTrace('Found ' + nodesLength + ' nodes in sidebar.', nodes);
-
-			} else {
-
-				logTrace('Unable to find nodes in sidebar. Expected:', selector);
-			}
-
-		} else {
-
-			logWarn('Unable to find sidebar on the current page. Expected:', sidebarSelector);
 		}
 
-		return nodes;
+		return nodes.filter(function(node) {
+
+			if (modes[mode] && !node.matches(modes[mode])) { return false; }
+			if (mode !== 'recommended') { return true; }
+
+			const kind = getSidebarChannelKind(node);
+			if (kind !== null) { return kind === 'recommended'; }
+
+			const section = node.closest('.side-nav-section');
+			const sectionKind = sidebarSectionTypes.get(section);
+			if (sectionKind) { return sectionKind === 'recommended'; }
+
+			// Legacy collapsed layout: followed channels precede recommendations.
+			// A lone unidentified section might contain followed channels, so leave it alone.
+			return sections.length > 1 && sections.indexOf(section) > 0;
+		});
+	}
+
+	/**
+	 * Identifies a channel group without depending on translated section labels.
+	 */
+	function getSidebarChannelKind(node) {
+
+		for (const attribute of ['data-a-id', 'data-test-selector']) {
+
+			const value = node.getAttribute(attribute) || '';
+			if (/^followed-channel(?:-|$)/.test(value)) { return 'followed'; }
+			if (/^(recommended|popular|similarity)-channel(?:-|$)/.test(value)) {
+
+				return 'recommended';
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -1149,6 +1129,7 @@
 		let result = {
 			type:     'channels',
 			name:     '',
+			login:    '',
 			category: '',
 			tags:     [],
 			title:    '',
@@ -1156,79 +1137,68 @@
 			node:     node
 		};
 
-		let buffer;
+		// The channel URL remains usable when avatars have empty or collaboration labels.
+		try {
 
-		/* BEGIN: name */
+			const url = new URL(node.getAttribute('href') || '', window.location.origin);
+			const match = url.pathname.match(/^\/([a-z0-9_]+)\/?$/i);
+			if (url.origin === window.location.origin && match) {
 
-			// collapsed sidebar
-			if (node.classList.contains('side-nav-card')) {
+				result.login = match[1];
+			}
+		} catch {
 
-				// automatically collapsed
-				buffer = node.querySelector('.tw-avatar');
+			// Keep reading visible metadata if Twitch supplied an invalid URL.
+		}
 
-				if (buffer !== null) {
+		// Current cards put side-nav-title on the text itself; older cards wrap it.
+		const titleNode = node.querySelector('[data-a-target="side-nav-title"]');
+		const nameNode = (titleNode && (titleNode.querySelector('[title]') || titleNode)) ||
+			node.querySelector('[data-a-target="side-nav-card-metadata"] p[title]');
 
-					buffer = buffer.getAttribute('aria-label');
+		if (nameNode) {
 
-					if (buffer !== null) {
+			result.name = (nameNode.getAttribute('title') || nameNode.textContent).trim();
 
-						result.name = buffer;
+		} else {
 
-					} else {
+			// Prefer the login over the combined names on collapsed collaboration avatars.
+			const avatarName = node.querySelector('.tw-avatar[aria-label]')?.getAttribute('aria-label') ||
+				node.querySelector('.tw-image-avatar[alt]')?.getAttribute('alt') || '';
+			const collaboration = node.querySelectorAll('.tw-avatar').length > 1;
+			result.name = (collaboration && result.login) || avatarName.trim() || result.login;
+		}
 
-						// manually collapsed
-						buffer = node.querySelector('.tw-image-avatar');
+		if (!result.name) {
 
-						if ((buffer !== null) && (buffer.alt)) {
+			return logError('Unable to determine name of channel.', node);
+		}
 
-							result.name = buffer.alt;
+		const categoryNode = node.querySelector(
+			'[data-a-target="side-nav-game-title"], .side-nav-card__metadata [title]'
+		);
+		const container = getSidebarItemContainer(node);
+		if (categoryNode) {
 
-						} else {
+			result.category = (categoryNode.getAttribute('title') || categoryNode.textContent).trim();
+			sidebarItemCategories.set(container, { login: result.login, category: result.category });
 
-							return logError('Unable to determine name of channel.', node);
-						}
-					}
+		} else {
 
-				} else {
+			// Collapsing removes category text. Retain it only for the same card/channel.
+			const previous = sidebarItemCategories.get(container);
+			if (!nameNode && result.login && previous?.login === result.login) {
 
-					return logError('Unable to determine name of channel.', node);
-				}
+				result.category = previous.category;
 
-			// expanded sidebar
 			} else {
 
-				buffer = node.querySelector('[data-a-target="side-nav-title"] p[title], [data-a-target="side-nav-card-metadata"] p[title]');
-
-				if (buffer) {
-
-					result.name = buffer.textContent;
-
-				} else {
-
-					return logError('Unable to determine name of channel.', node);
-				}
+				sidebarItemCategories.delete(container);
+				if (findCategory) { logVerbose('Unable to determine category of channel.', node); }
 			}
+		}
 
-		/* END: name */
-
-		/* BEGIN: category */
-
-			buffer = node.querySelector('[data-a-target="side-nav-game-title"]');
-
-			if (buffer !== null) {
-
-				result.category = buffer.textContent;
-
-			} else if (findCategory) {
-
-				logVerbose('Unable to determine category of channel.', node);
-			}
-
-		/* END: category */
-
-		// rerun
 		result.rerun = (node.querySelector('.tw-svg__asset--videorerun') !== null);
-
 		return result;
 	}
 
@@ -1244,7 +1214,7 @@
 		if (storedBlacklistedItems[item.type] === undefined) { return false; }
 
 		// blacklisted by name
-		if (matchTerms(item.name, item.type)) {
+		if (matchTerms(item.name, item.type) || (item.login && matchTerms(item.login, item.type))) {
 
 			logTrace('blacklisted by name:', item.name);
 			return true;
@@ -1494,69 +1464,65 @@
 	function removeSidebarItem(item) {
 		logTrace('invoking removeSidebarItem($)', item);
 
-		const topNodes = [];
-		let topNode    = item.node;
+		const container = getSidebarItemContainer(item.node);
+		if (!sidebarHiddenNodes.has(container)) {
 
-		switch (item.type) {
-
-			case 'channels':
-
-				// traverse through the DOM and hide the topmost node
-				while (true) {
-
-					if (
-						(!topNode) ||
-						(topNode === document.documentElement)
-					) {
-						if (topNodes.length > 0) {
-
-							item.node.setAttribute('data-uttv-hidden', '');
-
-							const nodeToRemove = topNodes[topNodes.length - 1];
-
-							if (nodeToRemove.classList.contains('side-nav-card')) {
-
-								nodeToRemove.parentNode.parentNode.style.cssText += '; display: none !important;';
-
-							} else {
-
-								nodeToRemove.style.cssText += '; display: none !important;';
-							}
-
-							return true;
-
-						} else {
-
-							logError('Could not find the expected parent node to remove sidebar channel item:', item);
-							break;
-						}
-					}
-
-					// order by vague to most specific selector
-					if (
-						topNode.classList.contains('side-nav-card') ||
-						(
-							topNode.classList.contains('tw-transition') &&
-							topNode.classList.contains('tw-transition--duration-medium') &&
-							topNode.classList.contains('tw-transition__scale-over')
-						)
-					) {
-						topNodes.push(topNode);
-					}
-
-					topNode = topNode.parentNode;
-				}
-
-			break;
-
-			default:
-
-				logError('Unable to remove sidebar item, because its type is unhandled:', item);
-
-			break;
+			sidebarHiddenNodes.set(container, {
+				display: container.style.getPropertyValue('display'),
+				priority: container.style.getPropertyPriority('display')
+			});
 		}
 
-		return false;
+		item.node.setAttribute('data-uttv-hidden', '');
+		container.style.setProperty('display', 'none', 'important');
+		return true;
+	}
+
+	/**
+	 * Finds a single sidebar card without hiding a section or relying on wrapper depth.
+	 */
+	function getSidebarItemContainer(node) {
+
+		const sidebar = rootNode.querySelector(sidebarSelector);
+		const transition = node.closest('.tw-transition');
+		if (
+			transition && sidebar && sidebar.contains(transition) &&
+			!transition.matches('.side-nav-section') &&
+			!transition.querySelector('.side-nav-section') &&
+			transition.querySelectorAll(sidebarItemSelector).length === 1
+		) {
+
+			return transition;
+		}
+
+		const card = node.parentElement.closest('.side-nav-card');
+		if (card && card.querySelectorAll(sidebarItemSelector).length === 1) {
+
+			return card;
+		}
+		return node;
+	}
+
+	/**
+	 * React can reuse a hidden card for another channel/category. Restore allowed cards.
+	 */
+	function restoreSidebarItem(item) {
+
+		const container = getSidebarItemContainer(item.node);
+		const previous = sidebarHiddenNodes.get(container);
+		if (previous) {
+
+			if (previous.display) {
+
+				container.style.setProperty('display', previous.display, previous.priority);
+
+			} else {
+
+				container.style.removeProperty('display');
+			}
+			sidebarHiddenNodes.delete(container);
+		}
+		item.node.removeAttribute('data-uttv-hidden');
 	}
 
 /* END: item operations */
@@ -2743,6 +2709,11 @@
 			}
 
 		/* END: root */
+
+		// Channel pages and slow sidebar mounts must not depend on directory readiness.
+		window.clearInterval(monitorSidebarInterval);
+		monitorSidebarInterval = window.setInterval(observeSidebar, 1000);
+		observeSidebar();
 
 		// start filtering
 		onPageChange(currentPage);
