@@ -221,7 +221,7 @@
 
 			} else {
 
-				logWarn('Current page is not supported:', page, pageType);
+				logVerbose('Current page has no filterable directory:', page, pageType);
 			}
 		}
 
@@ -304,7 +304,7 @@
 				}
 		}
 
-		return logWarn('Unable to detect type of page:', page);
+		return logVerbose('Page has no filterable directory:', page);
 	}
 
 	/**
@@ -355,6 +355,8 @@
 	 */
 	function observeSidebar() {
 		logTrace('invoking observeSidebar()');
+
+		if (rootNode === null) { return; }
 
 		const target = rootNode.querySelector(sidebarSelector);
 		if (target === observedSidebar) { return; }
@@ -495,6 +497,10 @@
 	function filterDirectory(mode = 'visible', remove = true) {
 		logTrace('invoking filterDirectory()');
 
+		// Blacklist messages also reach channel pages and pages still initializing.
+		// They may have a sidebar, but no directory ready to filter.
+		if (currentPageType === null || mainNode === null) { return []; }
+
 		// prevent filtering more than once at the same time
 		if (directoryFilterRunning === true) {
 
@@ -504,10 +510,17 @@
 
 		directoryFilterRunning = true;
 
-		const items          = getDirectoryItems(mode);
-		const remainingItems = filterDirectoryItems(items, remove);
+		let items;
+		let remainingItems;
+		try {
 
-		directoryFilterRunning = false;
+			items          = getDirectoryItems(mode);
+			remainingItems = filterDirectoryItems(items, remove);
+
+		} finally {
+
+			directoryFilterRunning = false;
+		}
 
 		// if items were removed, trigger scroll event to request more items
 		if (remainingItems.length < items.length) {
@@ -721,7 +734,8 @@
 
 			default:
 
-				logError('Unable to get item nodes of directory, because the page type is unhandled:', currentPageType);
+				logVerbose('Skipping directory items for page type:', currentPageType);
+				return [];
 		}
 
 		// replace selector wildcards
@@ -775,7 +789,7 @@
 
 		} else {
 
-			logWarn('No sidebar items found on the current page. Provided nodes:', itemNodes);
+			logVerbose('No sidebar items found on the current page. Provided nodes:', itemNodes);
 		}
 
 		return items;
@@ -786,6 +800,8 @@
 	 */
 	function getSidebarItemNodes(mode) {
 		logTrace('invoking getSidebarItemNodes($)', mode);
+
+		if (rootNode === null) { return []; }
 
 		const modes = {
 			'all':         '',
@@ -1717,7 +1733,7 @@
 		await storageSet({ 'renderButtons': renderButtons });
 
 		const buttonsSelector = '.uttv-hide-item, .uttv-hide-tag';
-		const buttons         = mainNode.querySelectorAll(buttonsSelector);
+		const buttons         = (mainNode || rootNode || document).querySelectorAll(buttonsSelector);
 		const buttonsLength   = buttons.length;
 
 		if (buttonsLength > 0) {
@@ -1986,7 +2002,7 @@
 			// try to observe sidebar anyway
 			observeSidebar();
 
-			return logWarn('Stopped onPageChange($) polling, because the current page is not supported.', page);
+			return logVerbose('Stopped directory polling; only the sidebar is filtered on this page.', page);
 		}
 
 		pageLoads = true;
